@@ -1,0 +1,13 @@
+services:
+  orchestrator:
+    build: .
+    container_name: ai-orchestrator
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./projects:/app/projects
+      - ./skills:/app/skills
+    env_file:
+      - .env
+    restart: unless-stopped

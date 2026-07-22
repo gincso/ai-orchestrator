@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-6">
+    <a href="/" class="text-cyan-400 hover:underline text-sm">&larr; Back to Projects</a>
+</div>
+
+<div id="project-header" class="mb-6">
+    <h1 class="text-2xl font-bold">Project #{{ project_id }}</h1>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2">
+        <h2 class="text-lg font-semibold mb-3">Live Status</h2>
+        <div id="live-feed" class="bg-gray-800 rounded-lg p-4 border border-gray-700 h-96 overflow-y-auto font-mono text-sm space-y-1">
+            <div class="text-gray-500">Waiting for events...</div>
+        </div>
+
+        <div class="mt-6">
+            <h2 class="text-lg font-semibold mb-3">Submit Task</h2>
+            <form onsubmit="submitTask(event)" class="space-y-3">
+                <input id="task-input" type="text" placeholder="Describe the task..." 
+                    class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm">
+                <button type="submit" class="bg-cyan-600 hover:bg-cyan-500 px-4 py-2 rounded text-sm font-medium">
+                    Submit Task
+                </button>
+            </form>
+        </div>
+
+        <div class="mt-6">
+            <h2 class="text-lg font-semibold mb-3">Tasks</h2>
+            <div id="task-list" class="space-y-2">
+                <div class="text-gray-500">No tasks yet.</div>
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <h2 class="text-lg font-semibold mb-3">Artifacts</h2>
+        <div id="artifact-list" class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-2">
+            <div class="text-gray-500">No artifacts yet.</div>
+        </div>
+    </div>
+</div>
+
+<script>
+const projectId = {{ project_id }};
+const feed = document.getElementById('live-feed');
+
+const evtSource = new EventSource(`/projects/${projectId}/stream`);
+evtSource.addEventListener('manager_status', e => addEvent(e.data, 'cyan'));
+evtSource.addEventListener('agent_status', e => addEvent(e.data, 'yellow'));
+evtSource.addEventListener('task_created', e => addEvent(e.data, 'green'));
+evtSource.addEventListener('artifact_created', e => addEvent(e.data, 'blue'));
+evtSource.addEventListener('skill_created', e => addEvent(e.data, 'purple'));
+evtSource.addEventListener('project_created', e => addEvent(e.data, 'green'));
+evtSource.onerror = () => addEvent(JSON.stringify({event: 'error', data: {status: 'Connection lost'}}), 'red');
+
+function addEvent(raw, color) {
+    try {
+        const p = JSON.parse(raw);
+        const msg = p.event + ': ' + JSON.stringify(p.data);
+        const div = document.createElement('div');
+        div.className = `text-${color}-400`;
+        div.textContent = `[${new Date().toLocaleTimeString()}] ${msg.slice(0, 120)}`;
+        feed.appendChild(div);
+        feed.scrollTop = feed.scrollHeight;
+    } catch(e) {}
+}
+
+async function submitTask(e) {
+    e.preventDefault();
+    const input = document.getElementById('task-input');
+    const desc = input.value;
+    if (!desc) return;
+    input.value = '';
+    addEvent(JSON.stringify({event: 'submitted', data: {task: desc}}), 'white');
+    await fetch(`/projects/${projectId}/tasks?description=${encodeURIComponent(desc)}`, { method: 'POST' });
+    loadTasks();
+}
+
+async function loadTasks() {
+    const res = await fetch(`/projects/${projectId}/data`);
+    const data = await res.json();
+    document.getElementById('project-header').innerHTML = `
+        <h1 class="text-2xl font-bold">${data.name}</h1>
+        <p class="text-gray-400 text-sm">${data.description || 'No description'} &middot; ${data.status}</p>
+    `;
+    const taskList = document.getElementById('task-list');
+    if (data.tasks.length === 0) {
+        taskList.innerHTML = '<div class="text-gray-500">No tasks yet.</div>';
+    } else {
+        taskList.innerHTML = data.tasks.map(t => `
+            <div class="bg-gray-800 rounded p-3 border border-gray-700">
+                <div class="flex justify-between">
+                    <span class="font-medium">${t.title}</span>
+                    <span class="text-sm text-${t.status === 'completed' ? 'green' : t.status === 'failed' ? 'red' : 'yellow'}-400">${t.status}</span>
+                </div>
+                <div class="text-xs text-gray-400">Agent: ${t.agent} &middot; Category: ${t.category}</div>
+                ${t.result ? `<div class="text-xs text-gray-500 mt-1">${t.result.slice(0, 200)}</div>` : ''}
+            </div>
+        `).join('');
+    }
+    const artifactList = document.getElementById('artifact-list');
+    if (data.artifacts.length === 0) {
+        artifactList.innerHTML = '<div class="text-gray-500">No artifacts yet.</div>';
+    } else {
+        artifactList.innerHTML = data.artifacts.map(a => `
+            <div class="text-sm text-gray-300">📄 ${a.path}</div>
+        `).join('');
+    }
+}
+
+loadTasks();
+setInterval(loadTasks, 3000);
+</script>
+{% endblock %}

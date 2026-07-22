@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+    <h1 class="text-2xl font-bold">Projects</h1>
+    <button onclick="createProject()" class="bg-cyan-600 hover:bg-cyan-500 px-4 py-2 rounded text-sm font-medium">
+        + New Project
+    </button>
+</div>
+
+<div id="project-list" class="space-y-4">
+    <div class="text-gray-400">Loading projects...</div>
+</div>
+
+<script>
+async function loadProjects() {
+    const res = await fetch('/projects');
+    const projects = await res.json();
+    const el = document.getElementById('project-list');
+    if (projects.length === 0) {
+        el.innerHTML = '<div class="text-gray-400">No projects yet. Create one to get started.</div>';
+        return;
+    }
+    el.innerHTML = projects.map(p => `
+        <a href="/projects/${p.id}" class="block bg-gray-800 rounded-lg p-4 hover:bg-gray-750 border border-gray-700">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h3 class="font-semibold text-lg">${p.name}</h3>
+                    <p class="text-sm text-gray-400">${p.description || 'No description'}</p>
+                </div>
+                <div class="text-right text-sm">
+                    <div class="text-${p.status === 'active' ? 'green' : 'gray'}-400">${p.status}</div>
+                    <div class="text-gray-500">${p.task_count} tasks</div>
+                    <div class="text-gray-500">${p.created_at}</div>
+                </div>
+            </div>
+        </a>
+    `).join('');
+}
+
+async function createProject() {
+    const name = prompt('Project name:');
+    if (!name) return;
+    await fetch(`/projects?name=${encodeURIComponent(name)}&description=`, { method: 'POST' });
+    loadProjects();
+}
+
+loadProjects();
+setInterval(loadProjects, 5000);
+</script>
+{% endblock %}
