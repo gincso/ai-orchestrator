@@ -25,12 +25,19 @@ def create_agent(agent_type: str, project_id: int) -> BaseAgent:
     return cls(project_id)
 
 
-def run_subtask(project_id: int, task_id: int, agent_type: str, title: str, description: str) -> str:
+def run_subtask(
+    project_id: int,
+    task_id: int,
+    agent_type: str,
+    title: str,
+    description: str,
+    peer_context: str = "",
+) -> str:
     publish(str(project_id), "task_status", {
         "task_id": task_id, "status": "running", "agent": agent_type, "title": title
     })
     agent = create_agent(agent_type, project_id)
-    result = agent.run(description)
+    result = agent.run(description, context=peer_context)
     publish(str(project_id), "task_status", {
         "task_id": task_id, "status": "done", "agent": agent_type, "title": title
     })

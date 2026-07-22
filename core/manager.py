@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from config import settings
@@ -58,79 +59,137 @@ class OrchestratorManager:
             "details": [s.get("title", "") for s in sub_tasks],
         })
 
-        results = []
-        completed = []
-        for i, st in enumerate(sub_tasks):
-            agent_type = st.get("category", "developer")
-            depends = st.get("depends_on", [])
+        shared_results: dict[int, str] = {}
+        waves = self._compute_waves(sub_tasks)
 
-            deps_met = all(d < len(completed) for d in depends)
+        self._emit("manager_status", {"status": f"executing {len(waves)} wave(s) in parallel"})
 
-            child = Task(
-                project_id=self.project_id,
-                parent_task_id=task_id,
-                title=st.get("title", f"Sub-task {i+1}"),
-                description=st.get("description", ""),
-                category=agent_type,
-                assigned_agent=agent_type,
-                status=DBTaskStatus.PENDING if not deps_met else DBTaskStatus.IN_PROGRESS,
-            )
-            session.add(child)
-            session.commit()
-            session.refresh(child)
-
-            self._emit("subtask_created", {
-                "sub_task_id": child.id,
-                "agent": agent_type,
-                "title": child.title,
-                "depends_on": depends,
+        for wave_idx, wave in enumerate(waves):
+            self._emit("manager_status", {
+                "status": f"wave_{wave_idx + 1}",
+                "tasks": [sub_tasks[i].get("title", "") for i in wave],
             })
 
-            result = run_subtask(
-                self.project_id, child.id, agent_type, child.title,
-                child.description or child.title,
-            )
-            results.append(result)
-            completed.append(i)
+            with ThreadPoolExecutor(max_workers=len(wave)) as executor:
+                future_map = {}
+                for i in wave:
+                    st = sub_tasks[i]
+                    agent_type = st.get("category", "developer")
+                    deps_context = self._build_collaboration_context(i, sub_tasks, shared_results)
 
-            child.status = DBTaskStatus.COMPLETED
-            child.result = result[:2000] if result else ""
-            session.add(child)
+                    child = Task(
+                        project_id=self.project_id,
+                        parent_task_id=task_id,
+                        title=st.get("title", f"Sub-task {i+1}"),
+                        description=st.get("description", ""),
+                        category=agent_type,
+                        assigned_agent=agent_type,
+                        status=DBTaskStatus.IN_PROGRESS,
+                    )
+                    session.add(child)
+                    session.commit()
+                    session.refresh(child)
 
-            run_log = AgentRun(
-                task_id=child.id,
-                agent_name=agent_type,
-                input_data=child.description or child.title,
-                output_data=result[:2000] if result else "",
-                ended_at=datetime.now(timezone.utc),
-            )
-            session.add(run_log)
+                    self._emit("subtask_created", {
+                        "sub_task_id": child.id,
+                        "agent": agent_type,
+                        "title": child.title,
+                        "wave": wave_idx + 1,
+                        "depends_on": st.get("depends_on", []),
+                    })
 
-            project_dir = f"projects/project_{self.project_id}"
-            file_path = f"{project_dir}/{agent_type}_{child.id}.md"
-            write_file(file_path, f"# {child.title}\n\n{result}\n")
-            session.add(Artifact(
-                task_id=child.id,
-                file_path=file_path,
-                artifact_type="markdown",
-                description=child.title,
-            ))
+                    future = executor.submit(
+                        run_subtask, self.project_id, child.id, agent_type,
+                        child.title, child.description or child.title,
+                        deps_context,
+                    )
+                    future_map[future] = (i, child, agent_type)
 
-            session.commit()
-            self._emit("artifact_created", {
-                "task_id": child.id, "path": file_path, "agent": agent_type
-            })
+                for future in as_completed(future_map):
+                    i, child, agent_type = future_map[future]
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        result = f"Error: {e}"
+                        logger.error(f"Sub-task {i} failed: {e}")
 
+                    shared_results[i] = result
+
+                    child.status = DBTaskStatus.COMPLETED
+                    child.result = result[:2000] if result else ""
+                    session.add(child)
+
+                    run_log = AgentRun(
+                        task_id=child.id,
+                        agent_name=agent_type,
+                        input_data=child.description or child.title,
+                        output_data=result[:2000] if result else "",
+                        ended_at=datetime.now(timezone.utc),
+                    )
+                    session.add(run_log)
+
+                    project_dir = f"projects/project_{self.project_id}"
+                    file_path = f"{project_dir}/{agent_type}_{child.id}.md"
+                    write_file(file_path, f"# {child.title}\n\n{result}\n")
+                    session.add(Artifact(
+                        task_id=child.id,
+                        file_path=file_path,
+                        artifact_type="markdown",
+                        description=child.title,
+                    ))
+
+                    session.commit()
+                    self._emit("artifact_created", {
+                        "task_id": child.id, "path": file_path, "agent": agent_type
+                    })
+                    self._emit("manager_status", {
+                        "status": "subtask_completed",
+                        "index": i,
+                        "agent": agent_type,
+                        "title": child.title,
+                    })
+
+        all_results = [shared_results.get(i, "") for i in range(len(sub_tasks))]
         db_task.status = DBTaskStatus.COMPLETED
-        db_task.result = "\n\n".join(results)[:3000]
+        db_task.result = "\n\n".join(all_results)[:3000]
         session.add(db_task)
         session.commit()
         session.close()
 
         self._emit("manager_status", {"status": "completed", "total_subtasks": len(sub_tasks)})
-        self._learn_and_create_skill(description, results)
+        self._learn_and_create_skill(description, all_results)
 
         return db_task
+
+    def _compute_waves(self, sub_tasks: list[dict]) -> list[list[int]]:
+        completed: set[int] = set()
+        waves: list[list[int]] = []
+        remaining = set(range(len(sub_tasks)))
+
+        while remaining:
+            wave = sorted([
+                i for i in remaining
+                if all(d in completed for d in sub_tasks[i].get("depends_on", []))
+            ])
+            if not wave:
+                wave = sorted(remaining)
+            waves.append(wave)
+            completed.update(wave)
+            remaining -= set(wave)
+
+        return waves
+
+    def _build_collaboration_context(self, task_index: int, sub_tasks: list[dict], shared_results: dict[int, str]) -> str:
+        deps = sub_tasks[task_index].get("depends_on", [])
+        if not deps:
+            return ""
+        parts = []
+        for d in deps:
+            if d in shared_results:
+                title = sub_tasks[d].get("title", f"Task {d}")
+                summary = shared_results[d][:1500]
+                parts.append(f"[Output from '{title}']:\n{summary}\n")
+        return "\n".join(parts)
 
     def _learn_and_create_skill(self, description: str, results: list[str]):
         prompt = (

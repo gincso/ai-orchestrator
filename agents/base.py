@@ -26,15 +26,23 @@ class BaseAgent:
         self._emit("agent_status", {"status": "started", "task": task_description})
 
         system = self.get_system_prompt()
+
         if context:
-            system += f"\n\nContext:\n{context}"
+            collaborator_info = (
+                "\n\n## Results from peer agents you depend on\n"
+                "Other agents have already completed work that you should build upon. "
+                "Read their outputs carefully and incorporate their findings into your work. "
+                "Do not duplicate work already done.\n"
+                + context
+            )
+            system += collaborator_info
 
         tools = get_openai_tools()
         messages = [{"role": "system", "content": system}]
         messages.append({"role": "user", "content": task_description})
         turn_count = 0
 
-        while turn_count < 10:
+        while turn_count < 15:
             resp = call_llm_with_tools(system, messages[-1]["content"] if len(messages) == 2 else task_description)
             tool_calls = getattr(resp, "tool_calls", None)
 
