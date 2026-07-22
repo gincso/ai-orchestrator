@@ -19,7 +19,7 @@ if static_dir.exists():
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html", {"request": request})
 
 
 @app.get("/projects")
@@ -54,7 +54,7 @@ def create_project(name: str, description: str = ""):
 
 @app.get("/projects/{project_id}", response_class=HTMLResponse)
 def project_detail(request: Request, project_id: int):
-    return templates.TemplateResponse("project.html", {"request": request, "project_id": project_id})
+    return templates.TemplateResponse(request, "project.html", {"request": request, "project_id": project_id})
 
 
 @app.get("/projects/{project_id}/data")
