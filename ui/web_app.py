@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
+import os
 
 from core.event_bus import stream, publish
 from core.manager import OrchestratorManager
@@ -76,7 +77,7 @@ def project_data(project_id: int):
         })
     artifacts = []
     for a in session.query(Artifact).join(Task).filter(Task.project_id == project_id).all():
-        artifacts.append({"path": a.file_path, "type": a.artifact_type})
+        artifacts.append({"id": a.id, "path": a.file_path, "type": a.artifact_type, "description": a.description})
     session.close()
     return {
         "id": proj.id,
@@ -119,6 +120,40 @@ def list_artifacts(project_id: int):
         .filter(Task.project_id == project_id)
         .all()
     )
-    result = [{"path": a.file_path, "type": a.artifact_type, "description": a.description} for a in artifacts]
+    result = [{"id": a.id, "path": a.file_path, "type": a.artifact_type, "description": a.description} for a in artifacts]
     session.close()
     return result
+
+
+@app.get("/projects/{project_id}/artifacts/{artifact_id}/read")
+def read_artifact(project_id: int, artifact_id: int):
+    session = get_session()
+    artifact = session.query(Artifact).filter(Artifact.id == artifact_id).first()
+    if not artifact:
+        session.close()
+        return {"error": "Artifact not found"}
+    path = artifact.file_path
+    session.close()
+    if not os.path.exists(path):
+        return {"error": "File not found on disk", "path": path}
+    try:
+        with open(path) as f:
+            content = f.read()
+        return {"id": artifact_id, "path": path, "content": content, "type": artifact.artifact_type}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/projects/{project_id}/artifacts/{artifact_id}/download")
+def download_artifact(project_id: int, artifact_id: int):
+    session = get_session()
+    artifact = session.query(Artifact).filter(Artifact.id == artifact_id).first()
+    session.close()
+    if not artifact or not os.path.exists(artifact.file_path):
+        return PlainTextResponse("File not found", status_code=404)
+    with open(artifact.file_path) as f:
+        content = f.read()
+    filename = Path(artifact.file_path).name
+    return PlainTextResponse(content, media_type="text/markdown", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    })

@@ -49,8 +49,29 @@
 
     <div>
         <h2 class="text-lg font-semibold mb-3">Artifacts</h2>
-        <div id="artifact-list" class="bg-gray-800 rounded-lg border border-gray-700 p-3 space-y-1 text-sm">
+        <div id="artifact-list" class="bg-gray-800 rounded-lg border border-gray-700 p-3 space-y-1 text-sm max-h-[400px] overflow-y-auto">
             <div class="text-gray-500">No artifacts yet.</div>
+        </div>
+    </div>
+</div>
+
+<!-- Artifact viewer modal -->
+<div id="artifact-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center p-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-600 w-full max-w-4xl max-h-[85vh] flex flex-col">
+        <div class="flex items-center justify-between p-4 border-b border-gray-700">
+            <div class="flex items-center gap-3">
+                <h3 id="modal-title" class="font-semibold text-lg truncate max-w-md"></h3>
+                <span id="modal-badge" class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300"></span>
+            </div>
+            <div class="flex items-center gap-2">
+                <a id="download-link" href="#" download class="bg-green-700 hover:bg-green-600 text-xs px-3 py-1.5 rounded font-medium">
+                    Download
+                </a>
+                <button onclick="closeViewer()" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+        </div>
+        <div id="modal-body" class="p-4 overflow-y-auto flex-1">
+            <pre id="modal-content" class="text-sm text-gray-200 font-mono whitespace-pre-wrap break-words"></pre>
         </div>
     </div>
 </div>
@@ -69,7 +90,6 @@ const AGENTS = {
 };
 
 const AGENT_TASKS = {};
-const WAVE_PLAN = [];
 
 function addEvent(raw, color) {
     try {
@@ -88,7 +108,6 @@ function addAgentCard(agentType, subTaskId, title, wave) {
     const cardId = `agent-${subTaskId}`;
     if (document.getElementById(cardId)) return;
 
-    const extra = wave ? `data-wave="${wave}"` : '';
     const card = document.createElement('div');
     card.id = cardId;
     card.className = 'bg-gray-900 rounded-lg border border-gray-600 p-3 transition-all duration-300';
@@ -155,9 +174,43 @@ function updateWaveConnectors() {
         const active = Array.from(cards).filter(c => c.dataset.status === 'running').length;
         const done = Array.from(cards).filter(c => c.dataset.status === 'done' || c.dataset.status === 'completed').length;
         const total = cards.length;
-        indicator.textContent = `Wave ${maxWave} · ${active} active · ${done}/${total} done`;
+        indicator.textContent = `Wave ${maxWave} \u00b7 ${active} active \u00b7 ${done}/${total} done`;
     }
 }
+
+async function openViewer(artifactId, path) {
+    const modal = document.getElementById('artifact-modal');
+    const title = document.getElementById('modal-title');
+    const badge = document.getElementById('modal-badge');
+    const content = document.getElementById('modal-content');
+    const downloadLink = document.getElementById('download-link');
+
+    modal.classList.remove('hidden');
+    title.textContent = path.split('/').pop() || path;
+    badge.textContent = path;
+    content.textContent = 'Loading...';
+    downloadLink.href = `/projects/${projectId}/artifacts/${artifactId}/download`;
+
+    try {
+        const res = await fetch(`/projects/${projectId}/artifacts/${artifactId}/read`);
+        const data = await res.json();
+        if (data.content) {
+            content.textContent = data.content;
+        } else {
+            content.textContent = 'Error: ' + (data.error || 'Failed to load');
+        }
+    } catch(e) {
+        content.textContent = 'Error loading file: ' + e.message;
+    }
+}
+
+function closeViewer() {
+    document.getElementById('artifact-modal').classList.add('hidden');
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeViewer();
+});
 
 function renderArtifacts(artifacts) {
     const el = document.getElementById('artifact-list');
@@ -165,7 +218,13 @@ function renderArtifacts(artifacts) {
         el.innerHTML = '<div class="text-gray-500">No artifacts yet.</div>';
     } else {
         el.innerHTML = artifacts.map(a => `
-            <div class="text-sm text-gray-300 truncate" title="${a.path}">📄 ${a.path}</div>
+            <div class="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer transition-colors" 
+                 onclick="openViewer(${a.id}, '${a.path.replace(/'/g, "\\'")}')"
+                 title="${a.path}">
+                <span class="text-sm flex-shrink-0">${a.type === 'markdown' ? '📄' : '📁'}</span>
+                <span class="text-sm text-gray-300 truncate flex-1">${(a.path.split('/').pop() || a.path)}</span>
+                <span class="text-xs text-gray-500 flex-shrink-0">${(a.path.match(/^(.+?)\//) || [,''])[1]}</span>
+            </div>
         `).join('');
     }
 }
@@ -175,44 +234,24 @@ evtSource.addEventListener('manager_status', e => {
     addEvent(e.data, 'cyan');
     try {
         const d = JSON.parse(e.data);
-        if (d.data && d.data.details && d.data.status === 'decomposed') {
-            WAVE_PLAN.length = 0;
-        }
-        if (d.data && d.data.status === 'completed') {
-            updateWaveConnectors();
-        }
+        if (d.data && d.data.status === 'completed') updateWaveConnectors();
     } catch(e) {}
 });
-evtSource.addEventListener('agent_status', e => {
-    addEvent(e.data, 'yellow');
-    try {
-        const d = JSON.parse(e.data);
-        if (d.data && d.data.status === 'tool_call') {
-            // show tool call activity
-        }
-    } catch(e) {}
-});
+evtSource.addEventListener('agent_status', e => addEvent(e.data, 'yellow'));
 evtSource.addEventListener('subtask_created', e => {
     addEvent(e.data, 'lime');
     try {
         const d = JSON.parse(e.data);
-        if (d.data) {
-            addAgentCard(d.data.agent, d.data.sub_task_id, d.data.title, d.data.wave);
-        }
+        if (d.data) addAgentCard(d.data.agent, d.data.sub_task_id, d.data.title, d.data.wave);
     } catch(e) {}
 });
 evtSource.addEventListener('task_status', e => {
     try {
         const d = JSON.parse(e.data);
-        if (d.data) {
-            updateAgentCard(d.data.task_id, d.data.status, '');
-        }
+        if (d.data) updateAgentCard(d.data.task_id, d.data.status, '');
     } catch(e) {}
 });
-evtSource.addEventListener('artifact_created', e => {
-    addEvent(e.data, 'blue');
-    loadData();
-});
+evtSource.addEventListener('artifact_created', e => { addEvent(e.data, 'blue'); loadData(); });
 evtSource.addEventListener('task_created', e => addEvent(e.data, 'green'));
 evtSource.addEventListener('skill_created', e => addEvent(e.data, 'purple'));
 evtSource.onerror = () => addEvent(JSON.stringify({event: 'error', data: {status: 'Connection lost'}}), 'red');
