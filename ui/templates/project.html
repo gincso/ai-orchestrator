@@ -1,42 +1,55 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="mb-6">
+<div class="mb-4">
     <a href="/" class="text-cyan-400 hover:underline text-sm">&larr; Back to Projects</a>
 </div>
 
-<div id="project-header" class="mb-6">
+<div id="project-header" class="mb-4">
     <h1 class="text-2xl font-bold">Project #{{ project_id }}</h1>
 </div>
 
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-    <div class="lg:col-span-2">
-        <h2 class="text-lg font-semibold mb-3">Live Status</h2>
-        <div id="live-feed" class="bg-gray-800 rounded-lg p-4 border border-gray-700 h-96 overflow-y-auto font-mono text-sm space-y-1">
-            <div class="text-gray-500">Waiting for events...</div>
+<div class="grid grid-cols-1 xl:grid-cols-4 gap-4 mb-6">
+    <div class="xl:col-span-3">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+            <div class="flex justify-between items-center mb-3">
+                <h2 class="text-lg font-semibold">Swarm Workspace</h2>
+                <span id="wave-indicator" class="text-xs text-gray-400">Idle</span>
+            </div>
+            <div id="swarm-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 min-h-[200px]">
+                <div class="col-span-full text-center text-gray-500 py-8">Submit a task to see agents in action</div>
+            </div>
         </div>
 
-        <div class="mt-6">
-            <h2 class="text-lg font-semibold mb-3">Submit Task</h2>
-            <form onsubmit="submitTask(event)" class="space-y-3">
-                <input id="task-input" type="text" placeholder="Describe the task..." 
-                    class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm">
-                <button type="submit" class="bg-cyan-600 hover:bg-cyan-500 px-4 py-2 rounded text-sm font-medium">
-                    Submit Task
+        <div class="mt-4 bg-gray-800 rounded-lg border border-gray-700 p-4">
+            <form onsubmit="submitTask(event)" class="flex gap-3">
+                <input id="task-input" type="text" placeholder="Describe the task for the swarm..." 
+                    class="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-cyan-500">
+                <button type="submit" class="bg-cyan-600 hover:bg-cyan-500 px-5 py-2 rounded text-sm font-medium whitespace-nowrap">
+                    Deploy Swarm
                 </button>
             </form>
         </div>
+    </div>
 
-        <div class="mt-6">
-            <h2 class="text-lg font-semibold mb-3">Tasks</h2>
-            <div id="task-list" class="space-y-2">
-                <div class="text-gray-500">No tasks yet.</div>
-            </div>
+    <div class="xl:col-span-1">
+        <h2 class="text-lg font-semibold mb-3">Live Feed</h2>
+        <div id="live-feed" class="bg-gray-800 rounded-lg border border-gray-700 p-3 h-[420px] overflow-y-auto font-mono text-xs space-y-1">
+            <div class="text-gray-500">Waiting for events...</div>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    <div class="xl:col-span-2">
+        <h2 class="text-lg font-semibold mb-3">Task Results</h2>
+        <div id="task-list" class="space-y-2">
+            <div class="text-gray-500">No tasks yet.</div>
         </div>
     </div>
 
     <div>
         <h2 class="text-lg font-semibold mb-3">Artifacts</h2>
-        <div id="artifact-list" class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-2">
+        <div id="artifact-list" class="bg-gray-800 rounded-lg border border-gray-700 p-3 space-y-1 text-sm">
             <div class="text-gray-500">No artifacts yet.</div>
         </div>
     </div>
@@ -45,27 +58,164 @@
 <script>
 const projectId = {{ project_id }};
 const feed = document.getElementById('live-feed');
+const swarm = document.getElementById('swarm-grid');
 
-const evtSource = new EventSource(`/projects/${projectId}/stream`);
-evtSource.addEventListener('manager_status', e => addEvent(e.data, 'cyan'));
-evtSource.addEventListener('agent_status', e => addEvent(e.data, 'yellow'));
-evtSource.addEventListener('task_created', e => addEvent(e.data, 'green'));
-evtSource.addEventListener('artifact_created', e => addEvent(e.data, 'blue'));
-evtSource.addEventListener('skill_created', e => addEvent(e.data, 'purple'));
-evtSource.addEventListener('project_created', e => addEvent(e.data, 'green'));
-evtSource.onerror = () => addEvent(JSON.stringify({event: 'error', data: {status: 'Connection lost'}}), 'red');
+const AGENTS = {
+    researcher: { icon: '🔬', label: 'Researcher', color: 'blue' },
+    planner: { icon: '📋', label: 'Planner', color: 'purple' },
+    developer: { icon: '💻', label: 'Developer', color: 'green' },
+    builder: { icon: '🏗️', label: 'Builder', color: 'orange' },
+    social_engineer: { icon: '🤝', label: 'Social Engineer', color: 'pink' },
+};
+
+const AGENT_TASKS = {};
+const WAVE_PLAN = [];
 
 function addEvent(raw, color) {
     try {
         const p = JSON.parse(raw);
         const msg = p.event + ': ' + JSON.stringify(p.data);
-        const div = document.createElement('div');
-        div.className = `text-${color}-400`;
-        div.textContent = `[${new Date().toLocaleTimeString()}] ${msg.slice(0, 120)}`;
-        feed.appendChild(div);
+        const d = document.createElement('div');
+        d.className = `text-${color}-400`;
+        d.textContent = `[${new Date().toLocaleTimeString()}] ${msg.slice(0, 200)}`;
+        feed.appendChild(d);
         feed.scrollTop = feed.scrollHeight;
     } catch(e) {}
 }
+
+function addAgentCard(agentType, subTaskId, title, wave) {
+    const info = AGENTS[agentType] || { icon: '🤖', label: agentType, color: 'gray' };
+    const cardId = `agent-${subTaskId}`;
+    if (document.getElementById(cardId)) return;
+
+    const extra = wave ? `data-wave="${wave}"` : '';
+    const card = document.createElement('div');
+    card.id = cardId;
+    card.className = 'bg-gray-900 rounded-lg border border-gray-600 p-3 transition-all duration-300';
+    card.setAttribute('data-agent', agentType);
+    card.setAttribute('data-status', 'pending');
+    card.setAttribute('data-wave', wave || '0');
+    card.innerHTML = `
+        <div class="flex items-center gap-2 mb-2">
+            <span class="text-lg">${info.icon}</span>
+            <span class="font-medium text-sm flex-1">${info.label}</span>
+            <span class="status-badge text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">pending</span>
+        </div>
+        <div class="text-xs text-gray-400 truncate" title="${title}">${title}</div>
+        <div class="output-preview text-xs text-gray-600 mt-1 hidden"></div>
+        <div class="wave-badge text-xs text-gray-600 mt-1">Wave ${wave || '?'}</div>
+    `;
+    swarm.appendChild(card);
+    AGENT_TASKS[subTaskId] = { cardId, agentType };
+    updateWaveConnectors();
+}
+
+function updateAgentCard(subTaskId, status, result) {
+    const info = AGENT_TASKS[subTaskId];
+    if (!info) return;
+    const card = document.getElementById(info.cardId);
+    if (!card) return;
+
+    card.setAttribute('data-status', status);
+    const badge = card.querySelector('.status-badge');
+    const outputDiv = card.querySelector('.output-preview');
+
+    const statusMap = {
+        running: { text: 'running', cls: 'bg-yellow-700 text-yellow-200' },
+        done: { text: 'done', cls: 'bg-green-700 text-green-200' },
+        completed: { text: 'done', cls: 'bg-green-700 text-green-200' },
+        error: { text: 'error', cls: 'bg-red-700 text-red-200' },
+        pending: { text: 'pending', cls: 'bg-gray-700 text-gray-300' },
+    };
+    const s = statusMap[status] || statusMap.pending;
+    badge.textContent = s.text;
+    badge.className = `status-badge text-xs px-2 py-0.5 rounded ${s.cls}`;
+
+    if (result) {
+        outputDiv.textContent = result.slice(0, 150);
+        outputDiv.className = 'output-preview text-xs text-gray-400 mt-1';
+    }
+
+    if (status === 'running') {
+        card.className = 'bg-gray-900 rounded-lg border border-yellow-500 p-3 transition-all duration-300 shadow-lg shadow-yellow-500/10';
+    } else if (status === 'done' || status === 'completed') {
+        card.className = 'bg-gray-900 rounded-lg border border-green-600 p-3 transition-all duration-300';
+    } else if (status === 'error') {
+        card.className = 'bg-gray-900 rounded-lg border border-red-600 p-3 transition-all duration-300';
+    } else {
+        card.className = 'bg-gray-900 rounded-lg border border-gray-600 p-3 transition-all duration-300';
+    }
+}
+
+function updateWaveConnectors() {
+    const cards = swarm.querySelectorAll('[data-wave]');
+    const maxWave = Math.max(...Array.from(cards).map(c => parseInt(c.dataset.wave) || 0), 0);
+    const indicator = document.getElementById('wave-indicator');
+    if (maxWave > 0) {
+        const active = Array.from(cards).filter(c => c.dataset.status === 'running').length;
+        const done = Array.from(cards).filter(c => c.dataset.status === 'done' || c.dataset.status === 'completed').length;
+        const total = cards.length;
+        indicator.textContent = `Wave ${maxWave} · ${active} active · ${done}/${total} done`;
+    }
+}
+
+function renderArtifacts(artifacts) {
+    const el = document.getElementById('artifact-list');
+    if (!artifacts || artifacts.length === 0) {
+        el.innerHTML = '<div class="text-gray-500">No artifacts yet.</div>';
+    } else {
+        el.innerHTML = artifacts.map(a => `
+            <div class="text-sm text-gray-300 truncate" title="${a.path}">📄 ${a.path}</div>
+        `).join('');
+    }
+}
+
+const evtSource = new EventSource(`/projects/${projectId}/stream`);
+evtSource.addEventListener('manager_status', e => {
+    addEvent(e.data, 'cyan');
+    try {
+        const d = JSON.parse(e.data);
+        if (d.data && d.data.details && d.data.status === 'decomposed') {
+            WAVE_PLAN.length = 0;
+        }
+        if (d.data && d.data.status === 'completed') {
+            updateWaveConnectors();
+        }
+    } catch(e) {}
+});
+evtSource.addEventListener('agent_status', e => {
+    addEvent(e.data, 'yellow');
+    try {
+        const d = JSON.parse(e.data);
+        if (d.data && d.data.status === 'tool_call') {
+            // show tool call activity
+        }
+    } catch(e) {}
+});
+evtSource.addEventListener('subtask_created', e => {
+    addEvent(e.data, 'lime');
+    try {
+        const d = JSON.parse(e.data);
+        if (d.data) {
+            addAgentCard(d.data.agent, d.data.sub_task_id, d.data.title, d.data.wave);
+        }
+    } catch(e) {}
+});
+evtSource.addEventListener('task_status', e => {
+    try {
+        const d = JSON.parse(e.data);
+        if (d.data) {
+            updateAgentCard(d.data.task_id, d.data.status, '');
+        }
+    } catch(e) {}
+});
+evtSource.addEventListener('artifact_created', e => {
+    addEvent(e.data, 'blue');
+    loadData();
+});
+evtSource.addEventListener('task_created', e => addEvent(e.data, 'green'));
+evtSource.addEventListener('skill_created', e => addEvent(e.data, 'purple'));
+evtSource.onerror = () => addEvent(JSON.stringify({event: 'error', data: {status: 'Connection lost'}}), 'red');
 
 async function submitTask(e) {
     e.preventDefault();
@@ -74,43 +224,43 @@ async function submitTask(e) {
     if (!desc) return;
     input.value = '';
     addEvent(JSON.stringify({event: 'submitted', data: {task: desc}}), 'white');
+    swarm.innerHTML = '<div class="col-span-full text-center text-gray-500 py-4">Deploying swarm...</div>';
     await fetch(`/projects/${projectId}/tasks?description=${encodeURIComponent(desc)}`, { method: 'POST' });
-    loadTasks();
 }
 
-async function loadTasks() {
+async function loadData() {
     const res = await fetch(`/projects/${projectId}/data`);
     const data = await res.json();
+    
     document.getElementById('project-header').innerHTML = `
-        <h1 class="text-2xl font-bold">${data.name}</h1>
-        <p class="text-gray-400 text-sm">${data.description || 'No description'} &middot; ${data.status}</p>
+        <h1 class="text-2xl font-bold">${data.name || 'Project #' + projectId}</h1>
+        <p class="text-gray-400 text-sm">${data.description || ''} &middot; ${data.status || ''}</p>
     `;
+
     const taskList = document.getElementById('task-list');
-    if (data.tasks.length === 0) {
-        taskList.innerHTML = '<div class="text-gray-500">No tasks yet.</div>';
-    } else {
+    if (data.tasks && data.tasks.length > 0) {
         taskList.innerHTML = data.tasks.map(t => `
             <div class="bg-gray-800 rounded p-3 border border-gray-700">
-                <div class="flex justify-between">
-                    <span class="font-medium">${t.title}</span>
-                    <span class="text-sm text-${t.status === 'completed' ? 'green' : t.status === 'failed' ? 'red' : 'yellow'}-400">${t.status}</span>
+                <div class="flex justify-between items-center">
+                    <span class="font-medium text-sm">${(AGENTS[t.agent]?.icon || '🤖')} ${t.title}</span>
+                    <span class="text-xs px-2 py-0.5 rounded ${
+                        t.status === 'completed' ? 'bg-green-700 text-green-200' : 
+                        t.status === 'failed' ? 'bg-red-700 text-red-200' : 
+                        'bg-yellow-700 text-yellow-200'
+                    }">${t.status}</span>
                 </div>
-                <div class="text-xs text-gray-400">Agent: ${t.agent} &middot; Category: ${t.category}</div>
-                ${t.result ? `<div class="text-xs text-gray-500 mt-1">${t.result.slice(0, 200)}</div>` : ''}
+                <div class="text-xs text-gray-500 mt-1">Agent: ${t.agent}</div>
+                ${t.result ? `<div class="text-xs text-gray-400 mt-1 border-t border-gray-700 pt-1">${t.result.slice(0, 300)}</div>` : ''}
             </div>
         `).join('');
-    }
-    const artifactList = document.getElementById('artifact-list');
-    if (data.artifacts.length === 0) {
-        artifactList.innerHTML = '<div class="text-gray-500">No artifacts yet.</div>';
     } else {
-        artifactList.innerHTML = data.artifacts.map(a => `
-            <div class="text-sm text-gray-300">📄 ${a.path}</div>
-        `).join('');
+        taskList.innerHTML = '<div class="text-gray-500">No tasks yet.</div>';
     }
+
+    renderArtifacts(data.artifacts);
 }
 
-loadTasks();
-setInterval(loadTasks, 3000);
+loadData();
+setInterval(loadData, 3000);
 </script>
 {% endblock %}

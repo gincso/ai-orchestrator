@@ -38,14 +38,19 @@ def call_llm_with_tools(
     model: str = "",
     temperature: float = 0.3,
     max_tokens: int = 8192,
+    messages: list[dict] | None = None,
 ):
     model = model or settings.agent_model
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
+    if messages:
+        msgs = messages
+    else:
+        msgs = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
-        ],
+        ]
+    resp = client.chat.completions.create(
+        model=model,
+        messages=msgs,
         tools=tools,
         temperature=temperature,
         max_tokens=max_tokens,

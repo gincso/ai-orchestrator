@@ -14,7 +14,6 @@ class BaseAgent:
 
     def __init__(self, project_id: int):
         self.project_id = project_id
-        self._status_cb = None
 
     def _emit(self, event_type: str, data: dict):
         publish(str(self.project_id), event_type, {**data, "agent": self.name})
@@ -26,7 +25,6 @@ class BaseAgent:
         self._emit("agent_status", {"status": "started", "task": task_description})
 
         system = self.get_system_prompt()
-
         if context:
             collaborator_info = (
                 "\n\n## Results from peer agents you depend on\n"
@@ -43,7 +41,7 @@ class BaseAgent:
         turn_count = 0
 
         while turn_count < 15:
-            resp = call_llm_with_tools(system, messages[-1]["content"] if len(messages) == 2 else task_description)
+            resp = call_llm_with_tools(system, "", tools, messages=messages)
             tool_calls = getattr(resp, "tool_calls", None)
 
             if not tool_calls:
@@ -59,6 +57,7 @@ class BaseAgent:
                     args = {}
                 self._emit("agent_status", {"status": "tool_call", "tool": name, "args": args})
                 result = dispatch(name, **args)
+                messages.append({"role": "assistant", "tool_calls": [tc]})
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result)})
 
             turn_count += 1

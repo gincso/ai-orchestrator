@@ -93,8 +93,8 @@ def project_data(project_id: int):
 async def submit_task(project_id: int, description: str, title: str = ""):
     init_db()
     manager = OrchestratorManager(project_id)
-    task = manager.submit_task(description, title=title)
-    return {"task_id": task.id, "status": "completed"}
+    result = manager.submit_task(description, title=title)
+    return {"task_id": result["id"], "status": result["status"]}
 
 
 @app.get("/projects/{project_id}/stream")

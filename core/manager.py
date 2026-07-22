@@ -154,12 +154,14 @@ class OrchestratorManager:
         db_task.result = "\n\n".join(all_results)[:3000]
         session.add(db_task)
         session.commit()
+        task_id = db_task.id
+        task_status = db_task.status.value
         session.close()
 
         self._emit("manager_status", {"status": "completed", "total_subtasks": len(sub_tasks)})
         self._learn_and_create_skill(description, all_results)
 
-        return db_task
+        return {"id": task_id, "status": task_status, "project_id": self.project_id}
 
     def _compute_waves(self, sub_tasks: list[dict]) -> list[list[int]]:
         completed: set[int] = set()
